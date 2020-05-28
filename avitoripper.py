@@ -8,7 +8,7 @@ from urllib.parse import urljoin
 import requests
 from lxml import etree
 from PIL import Image
-from pytesseract import image_to_string
+from tesserocr import image_to_text
 
 
 USER_AGENT = (
@@ -79,7 +79,7 @@ def get_phone(
     _, _, image_data = image_data_url.partition(',')
     with io.BytesIO(b64decode(image_data.strip())) as image_fo:
         with Image.open(image_fo) as image:
-            return image_to_string(image)
+            return image_to_text(image).strip()
 
 
 def grab(__url_or_item_id: str) -> str:
