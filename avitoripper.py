@@ -3,6 +3,7 @@ import re
 import sys
 from base64 import b64decode
 from itertools import chain, islice
+from typing import Dict
 from urllib.parse import urljoin
 
 import requests
@@ -25,14 +26,14 @@ JS_AVITO_ITEM_MARKER = 'avito.item'
 # This regex is deliberately simple and cannot properly parse
 # (qoutes, escapes, etc.) any field. We are only interested in a few of them.
 JS_AVITO_ITEM_ASSIGN_REGEX = re.compile(
-    r"""avito\.item\.(?P<key>[a-zA-Z0-9_]+) *= *['"]?(?P<value>.+?)['"]?;"""
+    r"""avito\.item\.(?P<key>[a-zA-Z0-9_]+) *= *['"]?(?P<value>.*?)['"]?;"""
 )
 
 
 ITEM_PHONE_SPLIT_REGEX = re.compile(r'[0-9a-f]+')
 
 
-def get_phone_key(item_id: str, item_phone: str):
+def get_phone_key(item_id: str, item_phone: str) -> str:
     """
     Deobfuscate phone key (`pkey` query parameter).
 
@@ -55,7 +56,7 @@ def get_phone_key(item_id: str, item_phone: str):
     return ''.join(islice(chain.from_iterable(iterable), None, None, 3))
 
 
-def get_avito_item(url: str, *, session: requests.Session):
+def get_avito_item(url: str, *, session: requests.Session) -> Dict:
     response = session.get(url, stream=True)
     response.raise_for_status()
     tree = etree.parse(response.raw, parser=etree.HTMLParser())
@@ -64,6 +65,10 @@ def get_avito_item(url: str, *, session: requests.Session):
         if found:
             return dict(found)
     raise ValueError('avito.item not found')
+
+
+def unicode_unescape(string: str) -> str:
+    return string.encode().decode('unicode-escape', errors='ignore')
 
 
 def get_phone(
@@ -79,10 +84,14 @@ def get_phone(
     _, _, image_data = image_data_url.partition(',')
     with io.BytesIO(b64decode(image_data.strip())) as image_fo:
         with Image.open(image_fo) as image:
-            return image_to_text(image).strip()
+            phone = image_to_text(image).strip()
+    phone_parts = list(filter(str.isdigit, phone))
+    if phone_parts[0] == '8':
+        phone_parts[0] = '+7'
+    return ''.join(phone_parts)
 
 
-def grab(__url_or_item_id: str) -> str:
+def grab(__url_or_item_id: str) -> Dict:
     if __url_or_item_id.startswith('http'):
         url = __url_or_item_id
     elif __url_or_item_id.isdigit():
@@ -96,11 +105,28 @@ def grab(__url_or_item_id: str) -> str:
         assert 'phone' in avito_item
         item_id = avito_item['id']
         phone_key = get_phone_key(item_id, avito_item['phone'])
-        return get_phone(item_id, phone_key, session=session)
+        phone = get_phone(item_id, phone_key, session=session)
+    url = avito_item.get('url', '')
+    if url and url.startswith('/'):
+        url = urljoin(BASE_URL, url)
+    image_url = avito_item.get('image', '')
+    if image_url and image_url.startswith('/'):
+        image_url = urljoin(BASE_URL, image_url)
+    return {
+        'id': item_id,
+        'url': url,
+        'image_url': image_url,
+        'title': unicode_unescape(avito_item.get('title', '')),
+        'location': unicode_unescape(avito_item.get('location', '')),
+        'price': avito_item.get('price', ''),
+        'phone': phone,
+    }
+    return
 
 
 if __name__ == '__main__':
     if len(sys.argv) != 2:
         sys.exit('Usage: avitoripper URL or avitoripper ITEM_ID')
-    phone = grab(sys.argv[1])
-    print(phone)
+    info = grab(sys.argv[1])
+    for key, value in info.items():
+        print(f'{key}: {value}')
